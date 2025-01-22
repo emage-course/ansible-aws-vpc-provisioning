@@ -1,0 +1,27 @@
+- hosts: localhost
+  gather_facts: no
+  vars_files:
+    - group_vars/aws_keys.yml
+  tasks:
+    - name: Get Subnet ID and AMI ID from existing server
+      amazon.aws.ec2_instance_info:
+        aws_access_key: "{{ AWS_ACCESS_KEY_ID }}"
+        aws_secret_key: "{{ AWS_SECRET_ACCESS_KEY }}"
+        region: "{{ AWS_REGION }}"
+        filters:
+          "tag:Name": "demo-instance"
+      register: ec2_facts
+
+    - name: Debug fetched EC2 details
+      debug:
+        var: ec2_facts
+
+    - name: Terminate demo-instanc Instance
+      amazon.aws.ec2_instance:
+        aws_access_key: "{{ AWS_ACCESS_KEY_ID }}"
+        aws_secret_key: "{{ AWS_SECRET_ACCESS_KEY }}"
+        region: us-east-2
+        state: started
+        tags:
+          Name: demo-instance
+

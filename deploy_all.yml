@@ -1,0 +1,264 @@
+---
+- name: AWS Infrastructure Automation
+  hosts: localhost
+  gather_facts: no
+  vars_files:
+    - group_vars/aws_keys.yml
+    - group_vars/all
+  collections:
+    - amazon.aws
+
+  tasks:
+    ###################################################################################################################
+    # Task #1 - Create a new Virtual Private Cloud (VPC)                                                             #
+    ###################################################################################################################
+    - name: Create a new Virtual Private Cloud (VPC)
+      amazon.aws.ec2_vpc_net:
+        region: us-east-2
+        name: ansibleVPC
+        cidr_block: 10.10.0.0/16
+        tenancy: default
+        state: present
+      register: ansibleVPC
+
+    - name: Display VPC details
+      debug:
+        var: ansibleVPC
+
+    ###################################################################################################################
+    # Task #2 - Create an Internet Gateway                                                                           #
+    ###################################################################################################################
+    - name: Create an Internet Gateway and associate with the VPC
+      amazon.aws.ec2_vpc_igw:
+        region: us-east-2
+        vpc_id: "{{ ansibleVPC.vpc.id }}"
+        state: present
+        tags:
+          Name: ansibleIGW
+      register: ansibleIGW
+
+    - name: Display Internet Gateway details
+      debug:
+        var: ansibleIGW
+
+    ###################################################################################################################
+    # Task #3 - Create a public subnet                                                                               #
+    ###################################################################################################################
+    - name: Create a Public Subnet in the VPC
+      amazon.aws.ec2_vpc_subnet:
+        region: us-east-2
+        vpc_id: "{{ ansibleVPC.vpc.id }}"
+        cidr: 10.10.1.0/24
+        map_public: yes
+        state: present
+        tags:
+          Name: ansibleSubnet
+      register: ansibleSubnet
+
+    - name: Display Subnet details
+      debug:
+        var: ansibleSubnet
+
+    ###################################################################################################################
+    # Task #4 - Create a route table                                                                                 #
+    ###################################################################################################################
+    - name: Create a Route Table and associate with the subnet
+      amazon.aws.ec2_vpc_route_table:
+        region: us-east-2
+        vpc_id: "{{ ansibleVPC.vpc.id }}"
+        state: present
+        subnets:
+          - "{{ ansibleSubnet.subnet.id }}"
+        routes:
+          - dest: 0.0.0.0/0
+            gateway_id: "{{ ansibleIGW.gateway_id }}"
+        tags:
+          Name: ansibleRT
+      register: ansibleRT
+
+    - name: Display Route Table details
+      debug:
+        var: ansibleRT
+
+    ###################################################################################################################
+    # Task #5 - Create a Security Group                                                                              #
+    ###################################################################################################################
+    - name: Create a Security Group in the VPC
+      amazon.aws.ec2_group:
+        region: us-east-2
+        vpc_id: "{{ ansibleVPC.vpc.id }}"
+        name: ansibleSG
+        description: "Security group for demo"
+        state: present
+        rules:
+          - proto: tcp
+            ports: [22, 80, 443]
+            cidr_ip: 0.0.0.0/0
+        rules_egress:
+          - proto: all
+            cidr_ip: 0.0.0.0/0
+        tags:
+          Name: ansibleSG
+      register: ansibleSG
+
+    - name: Display Security Group details
+      debug:
+        var: ansibleSG
+
+    ###################################################################################################################
+    # Task #6 - Create SSH Key                                                                                       #
+    ###################################################################################################################
+
+- name: Create AWS EC2 Key Pair from Existing Public Key
+  hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Read the public key file
+      slurp:
+        src: ~/.ssh/id_ed25519.pub
+      register: public_key_data
+
+    - name: Create EC2 Key Pair using the public key
+      amazon.aws.ec2_key:
+        name: demo-key
+        region: us-east-2
+        key_material: "{{ public_key_data['content'] | b64decode }}"
+      register: ec2_keypair
+
+    - name: Display Key Pair details
+      debug:
+        var: ec2_keypair
+
+    - name: Save the private key locally
+      copy:
+        content: "{{ ec2_keypair.key.private_key }}"
+        dest: "./{{ ssh_keyname }}.pem"
+        mode: 0600
+      when: ec2_keypair.changed
+
+    ###################################################################################################################
+    # Task #7 - Find the Latest AMI                                                                                  #
+    ###################################################################################################################
+    - name: Find the latest Amazon Linux 2 AMI
+      amazon.aws.ec2_ami_info:
+        region: us-east-2
+        owners:
+          - "amazon"
+        filters:
+          name: "amzn2-ami-hvm-*-x86_64-gp2"
+          state: "available"
+      register: ami_info
+
+    - name: Set the latest AMI ID
+      set_fact:
+        ami_id: "{{ ami_info.images[0].image_id }}"
+
+    - name: Output the latest AMI ID
+      debug:
+        msg: "The latest Amazon Linux 2 AMI ID is: {{ ami_id }}"
+
+    ###################################################################################################################
+    # Task #8 - Launch an EC2 Instance                                                                               #
+    ###################################################################################################################
+    - name: Launch a new EC2 Instance
+      amazon.aws.ec2_instance:
+        region: us-east-2
+        instance_type: t2.micro
+        image_id: "{{ ami_id }}"
+        key_name: demo-key
+        vpc_subnet_id: "{{ ansibleSubnet.subnet.id }}"
+        security_groups: 
+          - "{{ ansibleSG.group_id }}"
+        tags:
+          Name: "demo-instance"
+      register: ec2_instance
+
+    - name: Display EC2 Instance details
+      debug:
+        var: ec2_instance
+
+    ###################################################################################################################
+    # Task #9 - Wait for SSH and Configure Instance                                                                   #
+    ###################################################################################################################
+    - name: Wait for SSH to come up
+      wait_for:
+        host: "{{ ec2_instance.instances[0].public_ip_address }}"
+        port: 22
+        delay: 10
+        timeout: 300
+        state: started
+
+    - name: Add the instance to Ansible inventory dynamically
+      add_host:
+        name: "{{ ec2_instance.instances[0].public_ip_address }}"
+        groups: dynamic_target
+
+    ###################################################################################################################
+    # Task #9 - Fetch instance details                                                                                #
+    ###################################################################################################################
+
+    - name: Fetch details of EC2 instance
+      amazon.aws.ec2_instance_info:
+        # aws_access_key: "{{ AWS_ACCESS_KEY_ID }}"
+        # aws_secret_key: "{{ AWS_SECRET_ACCESS_KEY }}"
+        # region: "{{ AWS_REGION }}"
+        region: us-east-2
+        filters:
+          tag:Name: "demo-instance"
+          instance-state-name: "running"
+      register: ec2_info
+
+    - name: Get Public IP address of EC2 instance
+      set_fact:
+        instance_ip: "{{ ec2_info.instances[0].public_ip_address }}"
+
+    - name: Display the IP address
+      debug:
+        msg: "The instance's public IP address is: {{ instance_ip }}"
+
+    - name: Add the instance to Ansible inventory dynamically
+      add_host:
+        name: "dynamic_target"
+        ansible_host: "{{ instance_ip }}"
+        ansible_user: ec2-user
+        ansible_ssh_private_key_file: ~/id_ed25519
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+    ###################################################################################################################
+    # Task #10 - Inbstall and configure http                                                                           #
+    ###################################################################################################################
+
+- name: Configure HTTP server
+  hosts: dynamic_target
+  gather_facts: yes
+  become: yes
+  tasks:
+    - name: Update system packages
+      yum:
+        name: "*"
+        state: latest
+
+    - name: Install Git and Apache HTTP Server
+      yum:
+        name:
+          - git
+          - httpd
+        state: present
+
+    - name: Clone the portfolio repository
+      git:
+        repo: https://github.com/emage-course/portfolio.git
+        dest: /tmp/portfolio
+        force: yes
+
+    - name: Copy application files to Apache root directory
+      copy:
+        src: /tmp/portfolio/website/
+        dest: /var/www/html/
+        remote_src: yes
+
+    - name: Start and enable Apache service
+      service:
+        name: httpd
+        state: started
+        enabled: yes

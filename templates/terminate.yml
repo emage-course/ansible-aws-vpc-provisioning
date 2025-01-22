@@ -1,0 +1,48 @@
+- hosts: localhost
+  gather_facts: no
+  vars_files:
+    - group_vars/aws_keys.yml
+  tasks:
+    - name: Get Subnet ID and AMI ID from existing server
+      amazon.aws.ec2_instance_info:
+        aws_access_key: "{{ AWS_ACCESS_KEY_ID }}"
+        aws_secret_key: "{{ AWS_SECRET_ACCESS_KEY }}"
+        region: "{{ AWS_REGION }}"
+        filters:
+          "tag:Name": "demo-instanc"
+      register: ec2_facts
+
+    - name: Debug fetched EC2 details
+      debug:
+        var: ec2_facts
+
+    # - name: Stop demo-instancs Instance
+    #   amazon.aws.ec2_instance:
+    #     aws_access_key: "{{ AWS_ACCESS_KEY_ID }}"
+    #     aws_secret_key: "{{ AWS_SECRET_ACCESS_KEY }}"
+    #     region: us-east-2
+    #     state: stopped
+    #     tags:
+    #       Name: demo-instancs
+
+    - name: Terminate demo-instanc Instance
+      amazon.aws.ec2_instance:
+        aws_access_key: "{{ AWS_ACCESS_KEY_ID }}"
+        aws_secret_key: "{{ AWS_SECRET_ACCESS_KEY }}"
+        region: us-east-2
+        state: terminated
+        tags:
+          Name: demo-instanc
+
+    # - name: Deploy demo-instanc EC2 Instance
+    #   amazon.aws.ec2_instance:
+    #     aws_access_key: "{{ AWS_ACCESS_KEY_ID }}"
+    #     aws_secret_key: "{{ AWS_SECRET_ACCESS_KEY }}"
+    #     region: us-east-2
+    #     instance_type: t2.micro
+    #     image_id: ami-0e761b32e9a48c576
+    #     # image_id: "{{ ec2_facts.instances[0].image_id }}"
+    #     # assign_public_ip: yes
+    #     vpc_subnet_id: "{{ ec2_facts.instances[0].subnet_id }}"
+    #     tags:
+    #       Name: demo-instanc

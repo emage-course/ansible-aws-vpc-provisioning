@@ -1,0 +1,15 @@
+- hosts: localhost
+  gather_facts: no
+  vars_files:
+    - group_vars/aws_keys.yml
+  tasks:
+    - name: Deploy demo-instanc EC2 Instance
+      amazon.aws.ec2_instance:
+        aws_access_key: "{{ AWS_ACCESS_KEY_ID }}"
+        aws_secret_key: "{{ AWS_SECRET_ACCESS_KEY }}"
+        region: us-east-2
+        instance_type: t2.micro
+        image_id: ami-0e761b32e9a48c576
+        vpc_subnet_id: "subnet-0000257483d689924"
+        tags:
+          Name: demo-instance
